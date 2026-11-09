@@ -273,6 +273,35 @@ def main():
     assert frame.sum() > 0
     print("OK  full app logic (gestures, left-hand quality, mute, progression + swipes, HUD)")
 
+    detection_app = HandChordApp(args)
+
+    def hand_at(x):
+        point = types.SimpleNamespace(x=x, y=0.6, z=0.0)
+        return types.SimpleNamespace(landmark=[point] * 21)
+
+    def detections(*hands):
+        return types.SimpleNamespace(
+            multi_hand_landmarks=[hand for hand, _, _ in hands],
+            multi_handedness=[types.SimpleNamespace(classification=[
+                types.SimpleNamespace(label=label, score=score)]) for _, label, score in hands],
+        )
+
+    right_hand, left_hand = hand_at(0.65), hand_at(0.25)
+    right, left = detection_app._detect(detections((right_hand, "Right", 0.9)))
+    assert right[1] is right_hand and left is None
+    # The newly visible left hand is classified as right, even more confidently.
+    # It must still be drawn and routed to the left control on this first frame.
+    right, left = detection_app._detect(detections(
+        (right_hand, "Right", 0.8), (left_hand, "Right", 0.95)
+    ))
+    assert right[1] is right_hand and left[1] is left_hand
+    right, left = detection_app._detect(detections(
+        (left_hand, "Left", 0.75), (right_hand, "Left", 0.95)
+    ))
+    assert right[1] is right_hand and left[1] is left_hand
+    assert detection_app._detect(detections()) == (None, None)
+    print("OK  duplicate handedness shows both hands on the first frame")
+
     quality_app = HandChordApp(args)
     right = (fake_hand([1, 1, 1, 1, 1], rng, noise=0), None)  # Dm
     left = fake_hand([0, 1, 0, 0, 0], rng, noise=0)
