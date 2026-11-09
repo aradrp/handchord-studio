@@ -16,6 +16,7 @@ import argparse
 import datetime
 import time
 from collections import Counter, deque
+from contextlib import ExitStack
 
 import cv2
 import mediapipe as mp
@@ -71,7 +72,7 @@ class HandChordApp:
         self.volume, self.fps = 0.8, 0.0
         self.rec_path = None
         self._toast, self._toast_until = "", 0.0
-        self._last_t = 0.0
+        self._last_confident_t = None
 
     # ------------------------------------------------------------------
     @property
@@ -97,7 +98,6 @@ class HandChordApp:
 
     def _update_state(self, right, left, now=None):
         now = time.perf_counter() if now is None else now
-        self._last_t = now
 
         # --- right hand: gesture, volume, swipe ---
         swipe = None
@@ -112,6 +112,8 @@ class HandChordApp:
             self.volume = float(np.clip(1.0 - (y - 0.2) * (0.8 / 0.65), 0.15, 1.0))
             swipe = self.swipe.update(now, right[0][0, 0], right[0][0, 1])
         self.gesture = self.stab_gesture.update(raw)
+        if raw not in (None, "unknown") and raw == self.gesture:
+            self._last_confident_t = now
         self.engine.set_volume(self.volume)
 
         if swipe and self.prog_mode:
@@ -134,14 +136,15 @@ class HandChordApp:
             self.engine.fx.set_brightness(1.0 - (left[0][0, 1] - 0.2) / 0.65)
 
         # --- which chord should sound? ---
-        if self.gesture == "unknown":                 # low confidence: keep what is playing
-            playing = self.sounding is not None
+        if (self._last_confident_t is None or
+                now - self._last_confident_t >= config.GESTURE_RELEASE_S):
+            gesture_degree = None
+        elif self.gesture == "unknown":  # keep the current chord through a brief confidence drop
             gesture_degree = None if self.sounding is None else self.sounding[0]
         else:
             gesture_degree = config.GESTURE_DEGREES.get(self.gesture)
-            playing = gesture_degree is not None
         if self.prog_mode:
-            degree = self.prog.degree if playing else None
+            degree = self.prog.degree if gesture_degree is not None else None
         else:
             degree = gesture_degree
 
@@ -256,85 +259,100 @@ class HandChordApp:
         elif key == ord("s"):
             self._save_session()
         elif key == ord("r"):
-            if eng.recording:
-                if eng.stop_recording(self.rec_path):
-                    print(f"Recording saved: {self.rec_path}")
-                    self.toast("recording saved")
+            if eng.has_recording:
+                self._save_recording()
             else:
-                config.REC_DIR.mkdir(exist_ok=True)
                 stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 self.rec_path = config.REC_DIR / f"handchord_{stamp}.wav"
                 eng.start_recording()
+
+    def _save_recording(self):
+        try:
+            saved = self.engine.stop_recording(self.rec_path)
+        except OSError as exc:
+            print(f"[!] Could not save recording: {exc}")
+            self.toast("WAV save failed. Press R to retry.")
+            return
+        if saved:
+            print(f"Recording saved: {self.rec_path}")
+            self.toast("recording saved")
 
     def _save_session(self):
         if not len(self.log):
             self.toast("nothing to save yet")
             return
-        config.SESSION_DIR.mkdir(exist_ok=True)
-        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = config.SESSION_DIR / f"session_{stamp}"
-        end = self._last_t - self.log.t0
-        self.log.export_csv(base.with_suffix(".csv"))
-        self.log.export_midi(base.with_suffix(".mid"), bpm=self.engine.bpm, end_time=end)
+        try:
+            config.SESSION_DIR.mkdir(exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            base = config.SESSION_DIR / f"session_{stamp}"
+            end = time.perf_counter() - self.log.t0
+            self.log.export_csv(base.with_suffix(".csv"))
+            self.log.export_midi(base.with_suffix(".mid"), bpm=self.engine.bpm, end_time=end)
+        except OSError as exc:
+            print(f"[!] Could not save session: {exc}")
+            self.toast("session save failed")
+            return
         print(f"Session saved: {base}.csv / .mid  ({len(self.log)} chords)")
         self.toast("session saved (CSV + MIDI)")
 
     # ------------------------------------------------------------------
     def run(self):
         print("Classifier:", self.classifier.name)
-        cap = cv2.VideoCapture(self.args.camera)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
-        if not cap.isOpened():
-            raise SystemExit("Could not open the camera; try a different --camera index.")
+        try:
+            with ExitStack() as cleanup:
+                cleanup.callback(self.midi.close)
+                cap = cv2.VideoCapture(self.args.camera)
+                cleanup.callback(cap.release)
+                if not cap.isOpened():
+                    raise SystemExit("Could not open the camera; try a different --camera index.")
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+                cleanup.callback(cv2.destroyAllWindows)
+                if not self.args.no_audio:
+                    import sounddevice as sd
+                    stream = sd.OutputStream(samplerate=config.SAMPLE_RATE, channels=1,
+                                             blocksize=config.BLOCK_SIZE, dtype="float32",
+                                             callback=self.engine.callback)
+                    cleanup.callback(stream.close)
+                    stream.start()
+                    cleanup.callback(stream.stop)
+                hands = mp.solutions.hands.Hands(max_num_hands=2, min_detection_confidence=0.6,
+                                                 min_tracking_confidence=0.5)
+                cleanup.callback(hands.close)
+                self._play(cap, hands)
+        finally:
+            try:
+                if self.engine.has_recording and self.rec_path:
+                    self._save_recording()
+            finally:
+                if len(self.log):
+                    self._save_session()
 
-        stream = None
-        if not self.args.no_audio:
-            import sounddevice as sd
-            stream = sd.OutputStream(samplerate=config.SAMPLE_RATE, channels=1,
-                                     blocksize=config.BLOCK_SIZE, dtype="float32",
-                                     callback=self.engine.callback)
-            stream.start()
-
-        hands = mp.solutions.hands.Hands(max_num_hands=2, min_detection_confidence=0.6,
-                                         min_tracking_confidence=0.5)
+    def _play(self, cap, hands):
         drawer = mp.solutions.drawing_utils
         t_prev = time.perf_counter()
-        try:
-            while True:
-                ok, frame = cap.read()
-                if not ok:
-                    break
-                frame = cv2.flip(frame, 1)    # mirrored -> Left/Right labels are correct
-                res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                right, left = self._detect(res)
-                for hand in (right, left):
-                    if hand is not None:
-                        drawer.draw_landmarks(frame, hand[1], mp.solutions.hands.HAND_CONNECTIONS)
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            frame = cv2.flip(frame, 1)    # mirrored -> Left/Right labels are correct
+            res = hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            right, left = self._detect(res)
+            for hand in (right, left):
+                if hand is not None:
+                    drawer.draw_landmarks(frame, hand[1], mp.solutions.hands.HAND_CONNECTIONS)
 
-                now = time.perf_counter()
-                self._update_state(right, left, now)
-                self.fps = 0.9 * self.fps + 0.1 / max(now - t_prev, 1e-6)
-                t_prev = now
+            now = time.perf_counter()
+            self._update_state(right, left, now)
+            self.fps = 0.9 * self.fps + 0.1 / max(now - t_prev, 1e-6)
+            t_prev = now
 
-                self._draw(frame)
-                cv2.imshow("HandChord Studio", frame)
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q"):
-                    break
-                self._handle_key(key)
-        finally:
-            if self.engine.recording and self.rec_path:
-                self.engine.stop_recording(self.rec_path)
-                print(f"Recording saved: {self.rec_path}")
-            if len(self.log):
-                self._save_session()
-            if stream:
-                stream.stop()
-                stream.close()
-            self.midi.close()
-            cap.release()
-            cv2.destroyAllWindows()
+            self._draw(frame)
+            cv2.imshow("HandChord Studio", frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+            self._handle_key(key)
 
 
 def parse_args():

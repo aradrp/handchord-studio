@@ -17,6 +17,8 @@ Tips for good data:
 import argparse
 import csv
 from collections import Counter
+from pathlib import Path
+from uuid import uuid4
 
 import cv2
 import mediapipe as mp
@@ -28,19 +30,19 @@ from hand_features import landmarks_to_array, normalize_landmarks
 SAMPLE_EVERY = 2   # take one sample every N frames (reduces near-duplicate samples)
 
 
-def load_existing():
+def load_existing(path=config.DATASET_PATH):
     rows = []
-    if config.DATASET_PATH.exists():
-        with open(config.DATASET_PATH, newline="") as f:
+    if path.exists():
+        with path.open(newline="") as f:
             for r in csv.reader(f):
                 if r:
                     rows.append((r[0], r[1:]))
     return rows
 
 
-def save_all(rows):
-    config.DATA_DIR.mkdir(exist_ok=True)
-    with open(config.DATASET_PATH, "w", newline="") as f:
+def save_all(rows, path=config.DATASET_PATH):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as f:
         w = csv.writer(f)
         for label, vals in rows:
             w.writerow([label, *vals])
@@ -49,11 +51,17 @@ def save_all(rows):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--dataset", type=Path, default=config.DATASET_PATH)
+    ap.add_argument("--participant", default="", help="anonymous participant ID, reused across their sessions")
     ap.add_argument("--target", type=int, default=300, help="target number of samples per gesture")
     args = ap.parse_args()
 
     gestures = list(config.GESTURE_DEGREES)
-    rows = load_existing()
+    rows = load_existing(args.dataset)
+    session_id = uuid4().hex
+    metadata = [session_id]
+    if args.participant.strip():
+        metadata.append(args.participant.strip())
     counts = Counter(r[0] for r in rows)
     current, recording, frame_i = 0, False, 0
 
@@ -83,7 +91,7 @@ def main():
             if recording and frame_i % SAMPLE_EVERY == 0:
                 norm = normalize_landmarks(landmarks_to_array(lm.landmark),
                                            mirror=(label == "Left"))
-                rows.append((gestures[current], [f"{v:.6f}" for v in norm.ravel()]))
+                rows.append((gestures[current], [f"{v:.6f}" for v in norm.ravel()] + metadata))
                 counts[gestures[current]] += 1
         frame_i += 1
 
@@ -117,8 +125,8 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
-    save_all(rows)
-    print(f"Saved: {config.DATASET_PATH}  ({len(rows)} samples)")
+    save_all(rows, args.dataset)
+    print(f"Saved: {args.dataset}  ({len(rows)} samples, session {session_id})")
     for g in gestures:
         print(f"  {g:<10} {counts[g]}")
 

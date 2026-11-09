@@ -8,6 +8,9 @@ Run:  python selftest.py
 import io
 import time
 import types
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -103,11 +106,31 @@ def main():
             norms.append(normalize_landmarks(fake_hand(p, rng)))
             labels.append(g)
     labels = np.array(labels)
-    model, best, acc, classes, cm = train_model.train(norms, labels, n_aug=2, verbose=False)
+    groups = np.tile(np.repeat(["s1", "s2", "s3"], 20), len(gest))
+    tr, te = train_model.validation_split(labels, groups, test_size=0.2, seed=42)
+    assert set(groups[tr]).isdisjoint(groups[te])
+    model, best, acc, classes, cm = train_model.train(
+        norms, labels, n_aug=2, verbose=False, groups=groups
+    )
     assert acc > 0.9, acc
     x = extract_features(fake_hand(gest["rock"], rng))[None, :]
     assert model.predict(x)[0] == "rock"
-    print(f"OK  training pipeline (best={best}, test acc={acc:.3f})")
+    print(f"OK  training pipeline (best={best}, held-out session acc={acc:.3f})")
+
+    from collect_data import load_existing, save_all
+    coordinates = ["0"] * 63
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "mixed.csv"
+        rows = [("one", coordinates), ("one", [*coordinates, "s1"]),
+                ("one", [*coordinates, "s2", "p1"]), ("one", [*coordinates, "s3", "p1"])]
+        save_all(rows, path)
+        assert load_existing(path) == rows
+        _, mixed_labels, mixed_sessions = train_model.load_dataset(path, group_by="session")
+        usable, _ = train_model.validation_rows(mixed_labels, mixed_sessions)
+        assert usable.tolist() == [1, 2, 3] and mixed_sessions.tolist() == ["", "s1", "s2", "s3"]
+        _, _, participants = train_model.load_dataset(path, group_by="participant")
+        assert participants.tolist() == ["", "", "p1", "p1"]
+    print("OK  legacy and session-tagged dataset rows round-trip")
     # 6) effects: reverb is stable + decays, low-pass removes highs, block-size independent
     from effects import EffectsChain
     fx = EffectsChain()
@@ -205,12 +228,14 @@ def main():
 
     # 11) cross-validation + latency benchmark on synthetic data
     import evaluate_model
-    cv = evaluate_model.cross_validate(norms, labels, k=3, n_aug=1)
+    for tr, te in evaluate_model.validation_folds(labels, groups, k=3, seed=42):
+        assert set(groups[tr]).isdisjoint(groups[te])
+    cv = evaluate_model.cross_validate(norms, labels, k=3, n_aug=1, groups=groups)
     for name, r in cv.items():
         assert np.mean(r["acc"]) > 0.85, (name, r["acc"])
     ms = evaluate_model.latency_benchmark(model, norms, n=50)
-    print(f"OK  evaluation (3-fold CV {', '.join(f'{n} {np.mean(r['acc']):.2f}' for n, r in cv.items())}; "
-          f"classify latency {ms:.2f} ms)")
+    scores = ", ".join(f"{name} {np.mean(result['acc']):.2f}" for name, result in cv.items())
+    print(f"OK  evaluation (3-fold session CV {scores}; classify latency {ms:.2f} ms)")
 
     # 12) the whole app logic with synthetic hands (no camera): modes, swipes, HUD drawing
     from app import HandChordApp
@@ -247,6 +272,87 @@ def main():
     app._draw(frame)
     assert frame.sum() > 0
     print("OK  full app logic (gestures, left-hand quality, mute, progression + swipes, HUD)")
+
+    import config
+    app.classifier.predict = lambda _: ("one", 0.1)
+    feed(None, n=5, hand=h0)
+    assert app.gesture == "unknown" and app.chord.name == "F"
+    app.midi.all_off = Mock()
+    feed(None, n=20, hand=h0)
+    assert app.chord is None and app.engine.synth._chord == []
+    app.midi.all_off.assert_called_once()
+    app.classifier.predict = lambda _: ("one", 1.0)
+    feed(None, hand=h0)
+    assert app.chord.name == "F"
+    print(f"OK  uncertain gestures release synth and MIDI after {config.GESTURE_RELEASE_S}s")
+
+    from app import cv2, mp
+    cap = Mock()
+    cap.read.return_value = (False, None)
+    hands = Mock()
+    app.midi.close = Mock()
+    with patch.object(cv2, "VideoCapture", return_value=cap), \
+         patch.object(mp.solutions.hands, "Hands", return_value=hands), \
+         patch.object(cv2, "destroyAllWindows") as destroy, \
+         patch.object(config, "SESSION_DIR") as session_dir:
+        session_dir.mkdir.side_effect = PermissionError("test export failure")
+        app.run()
+        session_dir.mkdir.assert_called_once()
+        cap.release.assert_called_once()
+        hands.close.assert_called_once()
+        destroy.assert_called_once()
+        app.midi.close.assert_called_once()
+    print("OK  resources close even when automatic session export fails")
+
+    import wave
+    recorder = AudioEngine()
+    recorder.start_recording()
+    recorder.render(256)
+    recorder.render(512)
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "recording.wav"
+        with patch.object(wave, "open", side_effect=PermissionError("test WAV failure")):
+            try:
+                recorder.stop_recording(path)
+            except PermissionError:
+                pass
+            else:
+                raise AssertionError("expected a WAV write failure")
+        assert recorder.has_recording and not recorder.recording and not path.exists()
+        real_wave_open = wave.open
+
+        def open_while_rendering(*args, **kwargs):
+            recorder.render(1024)
+            return real_wave_open(*args, **kwargs)
+
+        with patch.object(wave, "open", side_effect=open_while_rendering):
+            assert recorder.stop_recording(path)
+        with wave.open(str(path), "rb") as wav:
+            assert wav.getnframes() == 768
+        assert not recorder.has_recording
+    print("OK  WAV finalization is isolated from rendering and can be retried")
+
+    # At 120 BPM, 100 samples at 1 kHz advances 0.2 beats. At 60 BPM,
+    # the next eighth note (0.5 beats) then falls exactly 300 samples later.
+    for chunks in ([302], [300, 2]):
+        transport = AudioEngine(1000)
+        transport.fx.process = lambda block: block
+        transport.synth._render_voices = lambda n, active, *_: np.full(n, min(active) / 100)
+        transport.synth.arp = True
+        transport.set_chord([48, 52])
+        transport.backing.drums_on = True
+        transport.backing.groove = "disco"
+        transport.backing._kick = np.zeros(1)
+        transport.backing._hat = np.array([1.0])
+        transport.set_bpm(120)
+        transport.render(100)
+        assert transport.beat == 0.2
+        transport.set_bpm(60)
+        assert transport.beat == 0.2
+        audio = np.concatenate([transport.render(n) for n in chunks])
+        assert np.allclose(audio[:300], np.tanh(0.48))
+        assert np.allclose(audio[300:], np.tanh([0.52 + 0.5, 0.52]))
+    print("OK  tempo changes keep arp and drum boundaries aligned across blocks")
 
     # 13) performance: full chain must use far less than the audio block budget
     eng3 = AudioEngine()

@@ -77,7 +77,7 @@ python train_model.py       # 2) train
 python evaluate_model.py    # 3) (optional) cross-validation + latency, for your report
 python app.py               # 4) run (the model is loaded automatically)
 ```
-In `collect_data.py`: keys `1..8` select a gesture, `SPACE` starts/stops recording, `d` clears the current gesture, `q` saves and quits. Record about 300 samples per gesture and **move the hand slightly closer/farther, tilt it and shift it while recording** so the model generalizes.
+In `collect_data.py`: keys `1..8` select a gesture, `SPACE` starts/stops recording, `d` clears all samples for the current gesture in the selected dataset, and `q` saves and quits. Move and tilt your hand while recording, and repeat the full gesture set across independent runs with different lighting or camera positions. Each run gets its own session ID. Record each gesture in at least two sessions for training validation and at least five for the default five-fold evaluation. Use `--dataset path/to/gestures.csv` on all three commands to collect, train and evaluate with a separate dataset.
 
 Default gestures: `fist, one, two, three, four, open, thumbs_up, rock` - rename or add your own in `config.py`.
 
@@ -145,15 +145,17 @@ gesture/progression + quality + key + mode → build_chord (diatonic theory)
 
 **Features (78-dimensional):** 63 coordinates + 10 fingertip-to-fingertip distances + 5 fingertip-to-wrist distances.
 
-**Augmentation:** rotation ±25°, scale ±10%, Gaussian noise; applied to the training folds only and *after* the split (prevents data leakage).
+**Augmentation:** rotation ±25°, scale ±10%, and Gaussian noise are applied to the training folds after splitting the data.
+
+**Grouped validation:** training holds out whole sessions by default, and evaluation keeps sessions disjoint across folds. To measure performance on new people, record each person separately with `collect_data.py --participant P01` (reuse their anonymous ID across their sessions), then pass `--group-by participant` to training and evaluation. The final training run uses all samples, including legacy rows. Rows without the requested ID are excluded from grouped validation. With a legacy-only dataset, the default session mode labels its scores as frame-level. Those scores do not measure generalization to new sessions or users.
 
 **Dynamic gesture (swipe):** `|dx| ≥ 0.22` and `|dy| ≤ 0.6·|dx|` inside a 0.35 s window of wrist positions, plus a cooldown. It is rule-based on purpose (explainable, no extra training data); an LSTM or DTW model is the natural next step.
 
 **Diatonic chords:** built by stacking thirds on a scale degree, so quality (maj/min/dim) and name come out of the scale automatically. `dom7` gives true dominant sevenths for the blues.
 
-**Audio engine:** a single sample clock drives the arpeggiator, drums and bass, so everything stays in time. Drums are synthesized (pitch-swept kick, filtered-noise snare and hat); the bass follows the chord root (C2-B2). The reverb is a Schroeder design (4 comb + 2 all-pass filters); the filter is a biquad low-pass with the cutoff smoothed in the log domain. The whole chain renders a 11.6 ms block in about 1 ms.
+**Audio engine:** the arpeggiator, drums, bass, and beat indicator share a clock that preserves beat position when tempo changes. Drums are synthesized (pitch-swept kick, filtered-noise snare and hat); the bass follows the chord root (C2-B2). The reverb is a Schroeder design (4 comb + 2 all-pass filters); the filter is a biquad low-pass with the cutoff smoothed in the log domain. The whole chain renders a 11.6 ms block in about 1 ms.
 
-**Evaluation (`evaluate_model.py`):** stratified k-fold cross-validation of SVM / Random Forest / k-NN, per-class recall, a pooled confusion matrix (`models/cv_confusion_matrix.png`) and the per-hand classification latency.
+**Evaluation (`evaluate_model.py`):** session-grouped k-fold cross-validation of SVM / Random Forest / k-NN when session IDs are available, per-class recall, a pooled confusion matrix (`models/cv_confusion_matrix.png`), and per-hand classification latency.
 
 ## Troubleshooting
 
@@ -164,6 +166,7 @@ gesture/progression + quality + key + mode → build_chord (diatonic theory)
 | Camera does not open | Use `--camera 1` (or 2) |
 | Gestures get confused | Record more varied data; replace look-alike gestures (e.g. 3 vs 4 fingers) with distinct ones; check `confusion_matrix.png` |
 | Chords change too slowly | Lower `MIN_VOTES` or `VOTE_WINDOW` in `config.py` (more responsive, less stable) |
+| Chords release too soon during a tracking wobble | Increase `GESTURE_RELEASE_S` in `config.py` (default 0.35 seconds) |
 | Swipes trigger by accident / not at all | Adjust `min_dx`, `window_s`, `cooldown_s` in `dynamic_gestures.py` |
 | Audio crackles | Set `BLOCK_SIZE` to 1024; close heavy applications |
 | `mp.solutions` error | The mediapipe version must be `0.10.14` |
