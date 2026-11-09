@@ -23,8 +23,7 @@ class MLClassifier:
         bundle = joblib.load(path)
         self.model = bundle["model"]
         self.classes = list(bundle["classes"])
-        validation = bundle.get("validation", "frame split")
-        self.name = f"ML model: {bundle.get('best', '?')} ({validation} acc {bundle.get('accuracy', 0):.1%})"
+        self.name = f"ML model: {bundle.get('best', '?')} (test acc {bundle.get('accuracy', 0):.1%})"
 
     def predict(self, pts):
         x = features_from_normalized(normalize_landmarks(pts))[None, :]

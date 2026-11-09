@@ -79,7 +79,7 @@ class BackingBand:
         return self._cache[key]
 
     # --- audio thread ----------------------------------------------------------
-    def render(self, frames, pos, *, boundaries=None, bpm=None):
+    def render(self, frames, pos):
         with self._lock:
             bass_root = self._bass_root
         out = np.zeros(frames)
@@ -97,13 +97,10 @@ class BackingBand:
             return out
 
         groove = GROOVES[self.groove]
-        step_len = self.sr * 60.0 / (self.bpm if bpm is None else bpm) / 4.0
-        if boundaries is None:
-            boundaries = (
-                (min(frames - 1, max(0, round(k * step_len - pos))), k)
-                for k in range(math.ceil(pos / step_len), math.ceil((pos + frames) / step_len))
-            )
-        for off, k in boundaries:
+        step_len = self.sr * 60.0 / self.bpm / 4.0
+        k = math.ceil(pos / step_len)
+        while k * step_len < pos + frames:
+            off = min(frames - 1, max(0, int(round(k * step_len - pos))))
             step = k % STEPS
             hits = []
             if self.drums_on:
@@ -122,4 +119,5 @@ class BackingBand:
                 out[off:off + n] += arr[:n]
                 if n < len(arr):
                     self._active.append([arr, n])
+            k += 1
         return out * self.level

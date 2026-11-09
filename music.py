@@ -116,8 +116,9 @@ class ChordSynth:
         self.timbre = names[(names.index(self.timbre) + 1) % len(names)]
 
     # --- audio thread -------------------------------------------------------
-    def render(self, frames, pos=None, *, step=None, boundaries=()):
-        """Render with the engine's sixteenth-note grid or the standalone sample clock."""
+    def render(self, frames, pos=None):
+        """Render one block. `pos` = absolute sample position of the block start
+        (shared clock from the audio engine); if None an internal clock is used."""
         with self._lock:
             chord = list(self._chord)
         if pos is None:
@@ -128,22 +129,13 @@ class ChordSynth:
         if self.arp and chord:
             seq = sorted(chord)
             seq = seq + seq[-2:0:-1]                     # up and down
-            if step is None:
-                step_len = max(1, int(self.sr * 60 / self.bpm / 2))
-                step = 2 * (pos // step_len)
-            start = 0
-            blocks = []
-            for offset, next_step in boundaries:
-                if next_step % 2 == 0 and offset > start:
-                    active = {seq[(step // 2) % len(seq)]}
-                    blocks.append(self._render_voices(offset - start, active, timbre, 0.004, 0.14))
-                    start, step = offset, next_step
-            active = {seq[(step // 2) % len(seq)]}
-            tail = self._render_voices(frames - start, active, timbre, 0.004, 0.14)
-            return np.concatenate([*blocks, tail]) if blocks else tail
-        return self._render_voices(frames, set(chord), timbre, 0.03, 0.30)
+            step_len = max(1, int(self.sr * 60 / self.bpm / 2))
+            active = {seq[(pos // step_len) % len(seq)]}
+            attack, release = 0.004, 0.14
+        else:
+            active = set(chord)
+            attack, release = 0.03, 0.30
 
-    def _render_voices(self, frames, active, timbre, attack, release):
         t = np.arange(1, frames + 1)
         harm = np.arange(1, len(timbre) + 1)[:, None]
         amps = np.array(timbre)[:, None]

@@ -78,17 +78,3 @@ def count_fingers(pts):
     if d(4, 17) > d(3, 17) * 1.05:   # thumb
         count += 1
     return count
-
-
-def count_quality_fingers(pts):
-    """Count straight index-to-pinky fingers for the left-hand chord control."""
-    pts = np.asarray(pts)
-    bases = pts[5:21:4]
-    knuckles = pts[6:21:4]
-    tips = pts[8:21:4]
-    proximal = knuckles - bases
-    distal = tips - knuckles
-    # A folded finger can look long in the image. Use its 3D bend instead.
-    alignment = (proximal * distal).sum(axis=1)
-    lengths = np.linalg.norm(proximal, axis=1) * np.linalg.norm(distal, axis=1)
-    return int(np.count_nonzero(alignment > 0.7 * lengths))
