@@ -26,7 +26,7 @@ import config
 from classifiers import load_classifier
 from dynamic_gestures import SwipeDetector
 from engine import AudioEngine
-from hand_features import count_fingers, landmarks_to_array
+from hand_features import count_quality_fingers, landmarks_to_array
 from midi_out import MidiOut
 from music import CIRCLE_OF_FIFTHS, NOTE_NAMES, build_chord, midi_name
 from progressions import ProgressionPlayer
@@ -121,7 +121,7 @@ class HandChordApp:
             self.toast(f"swipe {swipe}")
 
         # --- left hand: quality (fingers) and brightness (height) ---
-        n = count_fingers(left[0]) if left is not None else 0
+        n = count_quality_fingers(left[0]) if left is not None else 0
         q = self.stab_quality.update(n)
         left_quality = config.QUALITY_BY_LEFT_FINGERS.get(q, "triad")
         if left_quality != "triad":

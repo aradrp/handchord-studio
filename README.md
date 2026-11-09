@@ -89,7 +89,7 @@ Default gestures: `fist, one, two, three, four, open, thumbs_up, rock` - rename 
 | 2 fingers | sus2 | Csus2 |
 | 3 fingers | sus4 | Csus4 |
 
-Raise the left hand for a **bright** sound, lower it for a **darker** (filtered) sound.
+For chord quality, the left hand counts extended fingers from the index finger to the pinky. The thumb does not affect the chord. Raise the left hand for a **bright** sound, or lower it for a **darker** sound.
 
 ### Progression mode (`p`)
 Press `p`, then:
