@@ -73,6 +73,7 @@ class HandChordApp:
         self.rec_path = None
         self._toast, self._toast_until = "", 0.0
         self._last_confident_t = None
+        self._hand_wrists = {}
 
     # ------------------------------------------------------------------
     @property
@@ -83,18 +84,34 @@ class HandChordApp:
         self._toast, self._toast_until = text, time.perf_counter() + seconds
 
     def _detect(self, res):
-        right = left = None
-        if res.multi_hand_landmarks:
-            for lm, hd in zip(res.multi_hand_landmarks, res.multi_handedness):
-                label = hd.classification[0].label
-                if config.SWAP_HANDEDNESS:
-                    label = "Left" if label == "Right" else "Right"
-                pts = landmarks_to_array(lm.landmark)
-                if label == "Right":
-                    right = (pts, lm)
-                else:
-                    left = (pts, lm)
-        return right, left
+        hands = []
+        for lm, hd in zip(res.multi_hand_landmarks or (), res.multi_handedness or ()):
+            classification = hd.classification[0]
+            label = classification.label
+            if config.SWAP_HANDEDNESS:
+                label = "Left" if label == "Right" else "Right"
+            hands.append((label, classification.score, landmarks_to_array(lm.landmark), lm))
+
+        if len(hands) == 2 and hands[0][0] == hands[1][0]:
+            # Both landmarks are usable. Resolve the duplicate label by wrist continuity.
+            label = hands[0][0]
+            other = "Left" if label == "Right" else "Right"
+            roles = (label, other)
+
+            def assignment_cost(pair):
+                movement = sum(
+                    np.linalg.norm(pts[0, :2] - self._hand_wrists[role])
+                    for role, (_, _, pts, _) in zip(roles, pair) if role in self._hand_wrists
+                )
+                return movement, -pair[0][1]
+
+            primary, secondary = min((hands, hands[::-1]), key=assignment_cost)
+            detected = {label: primary[2:], other: secondary[2:]}
+        else:
+            detected = {label: (pts, lm) for label, _, pts, lm in hands}
+
+        self._hand_wrists = {label: pts[0, :2].copy() for label, (pts, _) in detected.items()}
+        return detected.get("Right"), detected.get("Left")
 
     def _update_state(self, right, left, now=None):
         now = time.perf_counter() if now is None else now
@@ -316,7 +333,8 @@ class HandChordApp:
                     cleanup.callback(stream.close)
                     stream.start()
                     cleanup.callback(stream.stop)
-                hands = mp.solutions.hands.Hands(max_num_hands=2, min_detection_confidence=0.6,
+                hands = mp.solutions.hands.Hands(max_num_hands=2,
+                                                 min_detection_confidence=config.HAND_DETECTION_CONFIDENCE,
                                                  min_tracking_confidence=0.5)
                 cleanup.callback(hands.close)
                 self._play(cap, hands)
