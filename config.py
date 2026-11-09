@@ -46,6 +46,7 @@ DEFAULT_BPM = 110
 # Detection and stabilization
 # ---------------------------------------------------------------------------
 CONF_THRESHOLD = 0.60     # below this confidence the gesture counts as "unknown"
+GESTURE_RELEASE_S = 0.35  # release a chord after this long without a confirmed gesture
 VOTE_WINDOW = 7           # number of recent frames used for voting
 MIN_VOTES = 4             # minimum votes needed to change the gesture
 SWAP_HANDEDNESS = False   # set True if left/right are detected swapped
