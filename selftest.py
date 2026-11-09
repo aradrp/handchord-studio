@@ -273,6 +273,35 @@ def main():
     assert frame.sum() > 0
     print("OK  full app logic (gestures, left-hand quality, mute, progression + swipes, HUD)")
 
+    quality_app = HandChordApp(args)
+    right = (fake_hand([1, 1, 1, 1, 1], rng, noise=0), None)  # Dm
+    left = fake_hand([0, 1, 0, 0, 0], rng, noise=0)
+
+    def hold_left(pts, start):
+        for i in range(start, start + 8):
+            quality_app._update_state(right, (pts, None), i / 30)
+        return quality_app.chord.name
+
+    assert hold_left(left, 0) == "Dm7"
+
+    # A tucked thumb can look extended when its tip shifts in the image.
+    tucked_thumb = left.copy()
+    tucked_thumb[3] = left[17] + [0.06, 0, 0]
+    tucked_thumb[4] = left[17] + [0.08, 0, 0.04]
+    assert hold_left(tucked_thumb, 8) == "Dm7", quality_app.chord.name
+
+    # A curled middle finger can project past its knuckle in the 2D image.
+    curled_finger = left.copy()
+    wrist = left[0]
+    curled_finger[9] = wrist + [0, -0.20, 0]
+    curled_finger[10] = wrist + [0, -0.24, -0.07]
+    curled_finger[12] = wrist + [0, -0.29, 0.03]
+    assert hold_left(curled_finger, 16) == "Dm7", quality_app.chord.name
+
+    two_fingers = fake_hand([0, 1, 1, 0, 0], rng, noise=0)
+    assert hold_left(two_fingers, 24) == "Dsus2"
+    print("OK  folded fingers keep Dm7 stable and a deliberate second finger selects Dsus2")
+
     import config
     app.classifier.predict = lambda _: ("one", 0.1)
     feed(None, n=5, hand=h0)
