@@ -131,7 +131,7 @@ Check the sound without a camera: `python demo_offline.py` (renders plain chords
 
 ```
 Webcam → mirror flip → MediaPipe Hands (21 landmarks per hand)
-   ├─ right hand → normalization → 78 features → SVM/RF → (gesture, confidence) → 3-frame voting
+   ├─ right hand → normalization → 78 features → SVM/RF → (gesture, confidence) → 7-frame voting
    │        ├→ wrist height → volume
    │        └→ wrist trajectory → SwipeDetector → next/previous chord (progression mode)
    └─ left hand  → finger counting → chord quality

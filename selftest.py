@@ -264,13 +264,16 @@ def main():
             app._update_state((right_pts, None), (left_pts, None), feed.t)
         return app.chord.name
 
-    assert apply_pose(right_open, left_one, 3) == "Dm7"
+    assert apply_pose(right_open, left_one, 4) == "Dm7"
     assert apply_pose(right_open, left_thumb, 90) == "Dm7"
     for _ in range(4):
         assert apply_pose(right_open, left_two, 1) == "Dm7"
         assert apply_pose(right_open, left_one, 1) == "Dm7"
     assert apply_pose(right_open, left_two, 2) == "Dsus2"
-    assert apply_pose(right_one, left_one, 3) == "Cmaj7"
+    for i in range(7):
+        pose = right_one if i % 2 == 0 else right_open
+        chord = apply_pose(pose, left_one, 1)
+        assert chord == ("Dsus2" if i == 0 else "Dm7" if i < 6 else "Cmaj7")
     assert apply_pose(right_one, left_two, 2) == "Csus2"
 
     def observed_hand(x):
