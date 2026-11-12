@@ -25,7 +25,7 @@ import config
 from classifiers import load_classifier
 from dynamic_gestures import SwipeDetector
 from engine import AudioEngine
-from hand_features import count_fingers, landmarks_to_array
+from hand_features import count_quality_fingers, landmarks_to_array
 from midi_out import MidiOut
 from music import CIRCLE_OF_FIFTHS, NOTE_NAMES, build_chord, midi_name
 from progressions import ProgressionPlayer
@@ -57,7 +57,8 @@ class HandChordApp:
         self.synth = self.engine.synth
         self.midi = MidiOut(args.midi_port, enable=args.midi or bool(args.midi_port))
         self.stab_gesture = Stabilizer(config.VOTE_WINDOW, config.MIN_VOTES)
-        self.stab_quality = Stabilizer(config.VOTE_WINDOW, config.MIN_VOTES, initial=0)
+        self.stab_quality = Stabilizer(config.LEFT_QUALITY_FRAMES, config.LEFT_QUALITY_FRAMES, initial=0)
+        self._hand_wrists = {}
         self.swipe = SwipeDetector()
         self.prog = ProgressionPlayer()
         self.prog_mode = False
@@ -82,18 +83,30 @@ class HandChordApp:
         self._toast, self._toast_until = text, time.perf_counter() + seconds
 
     def _detect(self, res):
-        right = left = None
-        if res.multi_hand_landmarks:
-            for lm, hd in zip(res.multi_hand_landmarks, res.multi_handedness):
-                label = hd.classification[0].label
-                if config.SWAP_HANDEDNESS:
-                    label = "Left" if label == "Right" else "Right"
-                pts = landmarks_to_array(lm.landmark)
-                if label == "Right":
-                    right = (pts, lm)
-                else:
-                    left = (pts, lm)
-        return right, left
+        hands = []
+        for lm, hd in zip(res.multi_hand_landmarks or (), res.multi_handedness or ()):
+            label = hd.classification[0].label
+            if config.SWAP_HANDEDNESS:
+                label = "Left" if label == "Right" else "Right"
+            hands.append((label, (landmarks_to_array(lm.landmark), lm)))
+
+        detected = dict(hands)
+        if len(hands) == 2 and len(detected) == 1 and self._hand_wrists:
+            # The detector can temporarily give both hands the same label.
+            # Prefer the assignment closest to the previous wrists.
+            first, second = (hand for _, hand in hands)
+            assignments = ({"Right": first, "Left": second}, {"Right": second, "Left": first})
+
+            def wrist_motion(assignment):
+                return sum(np.linalg.norm(assignment[role][0][0, :2] - wrist)
+                           for role, wrist in self._hand_wrists.items())
+
+            best = min(assignments, key=wrist_motion)
+            if all(np.linalg.norm(best[role][0][0, :2] - wrist) < 0.2
+                   for role, wrist in self._hand_wrists.items()):
+                detected = best
+        self._hand_wrists = {role: pts[0, :2].copy() for role, (pts, _) in detected.items()}
+        return detected.get("Right"), detected.get("Left")
 
     def _update_state(self, right, left, now=None):
         now = time.perf_counter() if now is None else now
@@ -119,7 +132,7 @@ class HandChordApp:
             self.toast(f"swipe {swipe}")
 
         # --- left hand: quality (fingers) and brightness (height) ---
-        n = count_fingers(left[0]) if left is not None else 0
+        n = count_quality_fingers(left[0]) if left is not None else 0
         q = self.stab_quality.update(n)
         left_quality = config.QUALITY_BY_LEFT_FINGERS.get(q, "triad")
         if left_quality != "triad":

@@ -89,7 +89,7 @@ Default gestures: `fist, one, two, three, four, open, thumbs_up, rock` - rename 
 | 2 fingers | sus2 | Csus2 |
 | 3 fingers | sus4 | Csus4 |
 
-Raise the left hand for a **bright** sound, lower it for a **darker** (filtered) sound.
+Use the index through pinky fingers to select chord quality. Raise the left hand for a **bright** sound, or lower it for a **darker** sound.
 
 ### Progression mode (`p`)
 Press `p`, then:
@@ -131,7 +131,7 @@ Check the sound without a camera: `python demo_offline.py` (renders plain chords
 
 ```
 Webcam → mirror flip → MediaPipe Hands (21 landmarks per hand)
-   ├─ right hand → normalization → 78 features → SVM/RF → (gesture, confidence) → 7-frame voting
+   ├─ right hand → normalization → 78 features → SVM/RF → (gesture, confidence) → 3-frame voting
    │        ├→ wrist height → volume
    │        └→ wrist trajectory → SwipeDetector → next/previous chord (progression mode)
    └─ left hand  → finger counting → chord quality
@@ -163,7 +163,7 @@ gesture/progression + quality + key + mode → build_chord (diatonic theory)
 | Left and right are swapped | In `config.py` set `SWAP_HANDEDNESS = True` |
 | Camera does not open | Use `--camera 1` (or 2) |
 | Gestures get confused | Record more varied data; replace look-alike gestures (e.g. 3 vs 4 fingers) with distinct ones; check `confusion_matrix.png` |
-| Chords change too slowly | Lower `MIN_VOTES` or `VOTE_WINDOW` in `config.py` (more responsive, less stable) |
+| Chords change too slowly | Adjust `LEFT_QUALITY_FRAMES` for the left hand or `MIN_VOTES` and `VOTE_WINDOW` for the right hand in `config.py` |
 | Swipes trigger by accident / not at all | Adjust `min_dx`, `window_s`, `cooldown_s` in `dynamic_gestures.py` |
 | Audio crackles | Set `BLOCK_SIZE` to 1024; close heavy applications |
 | `mp.solutions` error | The mediapipe version must be `0.10.14` |
