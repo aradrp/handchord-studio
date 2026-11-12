@@ -78,3 +78,14 @@ def count_fingers(pts):
     if d(4, 17) > d(3, 17) * 1.05:   # thumb
         count += 1
     return count
+
+
+def count_quality_fingers(pts):
+    """Count extended index-to-pinky fingers using the bend at each middle joint."""
+    pts = np.asarray(pts)
+    knuckles = pts[6:21:4]
+    proximal = knuckles - pts[5:21:4]
+    distal = pts[8:21:4] - knuckles
+    alignment = (proximal * distal).sum(axis=1)
+    lengths = np.linalg.norm(proximal, axis=1) * np.linalg.norm(distal, axis=1)
+    return int(np.count_nonzero(alignment > 0.7 * lengths))
