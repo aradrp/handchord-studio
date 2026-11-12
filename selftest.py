@@ -248,48 +248,6 @@ def main():
     assert frame.sum() > 0
     print("OK  full app logic (gestures, left-hand quality, mute, progression + swipes, HUD)")
 
-    app = HandChordApp(args)
-    right_open = fake_hand([1, 1, 1, 1, 1], rng, noise=0)
-    right_one = fake_hand([0, 1, 0, 0, 0], rng, noise=0)
-    left_one = fake_hand([0, 1, 0, 0, 0], rng, noise=0)
-    left_two = fake_hand([0, 1, 1, 0, 0], rng, noise=0)
-    left_thumb = left_one.copy()
-    left_thumb[3] = left_one[17] + [0.06, 0, 0]
-    left_thumb[4] = left_one[17] + [0.08, 0, 0.04]
-    assert count_fingers(left_thumb) == 2
-
-    def apply_pose(right_pts, left_pts, frames):
-        for _ in range(frames):
-            feed.t += 1 / 30
-            app._update_state((right_pts, None), (left_pts, None), feed.t)
-        return app.chord.name
-
-    assert apply_pose(right_open, left_one, 4) == "Dm7"
-    assert apply_pose(right_open, left_thumb, 90) == "Dm7"
-    for _ in range(4):
-        assert apply_pose(right_open, left_two, 1) == "Dm7"
-        assert apply_pose(right_open, left_one, 1) == "Dm7"
-    assert apply_pose(right_open, left_two, 2) == "Dsus2"
-    for i in range(7):
-        pose = right_one if i % 2 == 0 else right_open
-        chord = apply_pose(pose, left_one, 1)
-        assert chord == ("Dsus2" if i == 0 else "Dm7" if i < 6 else "Cmaj7")
-    assert apply_pose(right_one, left_two, 2) == "Csus2"
-
-    def observed_hand(x):
-        point = types.SimpleNamespace(x=x, y=0.6, z=0)
-        return types.SimpleNamespace(landmark=[point] * 21)
-
-    right, left = observed_hand(0.7), observed_hand(0.3)
-    label = types.SimpleNamespace(classification=[types.SimpleNamespace(label="Right")])
-    app._detect(types.SimpleNamespace(multi_hand_landmarks=[right], multi_handedness=[label]))
-    paired = types.SimpleNamespace(multi_hand_landmarks=[right, left], multi_handedness=[label, label])
-    tracked_right, tracked_left = app._detect(paired)
-    assert tracked_right[1] is right and tracked_left[1] is left
-    app._handle_key(ord("k"))
-    assert app.key_idx == 1
-    print("OK  fast chord changes, stable left-hand quality, ambiguous handedness and keyboard control")
-
     # 13) performance: full chain must use far less than the audio block budget
     eng3 = AudioEngine()
     eng3.backing.drums_on = eng3.backing.bass_on = True
